@@ -143,61 +143,96 @@ class ExecutionEngine:
     async def _get_market_info(self, market_id: str) -> Optional[Dict]:
         """Get market information from Polymarket API"""
         try:
-            # This would call the actual Polymarket API
-            # For now, return mock data
-            return {
-                'id': market_id,
-                'outcomes': [
-                    {'id': f"{market_id}_yes", 'title': 'YES'},
-                    {'id': f"{market_id}_no", 'title': 'NO'}
-                ]
-            }
+            import httpx
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(f"https://clob.polymarket.com/markets/{market_id}")
+                if resp.status_code == 200:
+                    return resp.json()
+                logger.warning(f"Market {market_id} returned status {resp.status_code}")
+                return None
         except Exception as e:
             logger.error(f"Error getting market info for {market_id}: {str(e)}")
             return None
     
     def _get_outcome_id(self, market_info: Dict, direction: DirectionEnum) -> Optional[str]:
         """Get outcome token ID based on direction"""
-        outcomes = market_info.get('outcomes', [])
-        
-        for outcome in outcomes:
-            if direction == DirectionEnum.YES and outcome.get('title') == 'YES':
-                return outcome.get('id')
-            elif direction == DirectionEnum.NO and outcome.get('title') == 'NO':
-                return outcome.get('id')
-        
+        tokens = market_info.get('tokens', [])
+
+        for token in tokens:
+            outcome = token.get('outcome', '').upper()
+            if direction == DirectionEnum.YES and outcome == 'YES':
+                return token.get('token_id')
+            elif direction == DirectionEnum.NO and outcome == 'NO':
+                return token.get('token_id')
+
+        # Fallback: first token = YES, second = NO
+        if len(tokens) >= 2:
+            idx = 0 if direction == DirectionEnum.YES else 1
+            return tokens[idx].get('token_id')
+
         return None
     
     async def _get_current_price(self, outcome_id: str) -> Optional[float]:
-        """Get current price for outcome token"""
+        """Get current price for outcome token from Polymarket CLOB orderbook"""
         try:
-            # This would call the CLOB client to get current price
-            # For now, return mock price
-            return 0.5  # 50 cents
+            import httpx
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    f"https://clob.polymarket.com/price",
+                    params={"token_id": outcome_id, "side": "buy"},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return float(data.get("price", 0))
+            # Fallback: try midpoint from orderbook
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    f"https://clob.polymarket.com/book",
+                    params={"token_id": outcome_id},
+                )
+                if resp.status_code == 200:
+                    book = resp.json()
+                    best_bid = float(book.get("bids", [{}])[0].get("price", 0)) if book.get("bids") else 0
+                    best_ask = float(book.get("asks", [{}])[0].get("price", 0)) if book.get("asks") else 0
+                    if best_bid > 0 and best_ask > 0:
+                        return (best_bid + best_ask) / 2
+                    return best_bid or best_ask or None
+            return None
         except Exception as e:
             logger.error(f"Error getting price for outcome {outcome_id}: {str(e)}")
             return None
     
     async def _place_order(self, outcome_id: str, size: float, price: float, direction: DirectionEnum) -> Optional[Dict]:
-        """Place order on Polymarket CLOB"""
+        """Place order on Polymarket CLOB using py-clob-client"""
         try:
-            # Convert size from USD to shares
-            shares = size / price
-            
-            # This would use the actual CLOB client
-            # For now, return mock order result
-            order_result = {
-                'id': f"order_{datetime.utcnow().timestamp()}",
-                'outcome_id': outcome_id,
-                'size': shares,
-                'price': price,
-                'direction': direction.value,
-                'status': 'filled'
+            if not self.clob_client:
+                raise TradingError("CLOB client not initialized")
+
+            from py_clob_client.order_builder.constants import BUY, SELL
+
+            # Buy YES tokens = bullish, Buy NO tokens = bearish
+            side = BUY
+
+            order_args = {
+                "token_id": outcome_id,
+                "price": round(price, 2),
+                "size": round(size / price, 2),  # Convert USD to shares
+                "side": side,
             }
-            
-            logger.info(f"Mock order placed: {order_result}")
-            return order_result
-            
+
+            # Create and sign the order
+            signed_order = self.clob_client.create_and_sign_order(order_args)
+            result = self.clob_client.post_order(signed_order)
+
+            if result and result.get("success"):
+                order_id = result.get("orderID", result.get("id", f"order_{datetime.utcnow().timestamp()}"))
+                logger.info(f"Order placed: {order_id} | {outcome_id} | {size} USD @ {price}")
+                return {"id": order_id, "status": "placed", **order_args}
+            else:
+                error_msg = result.get("errorMsg", "Unknown error") if result else "No response"
+                logger.error(f"Order rejected: {error_msg}")
+                return None
+
         except Exception as e:
             logger.error(f"Error placing order: {str(e)}")
             raise TradingError(f"Order placement failed: {str(e)}")
@@ -272,8 +307,11 @@ class ExecutionEngine:
             # Calculate unrealized P&L
             total_unrealized_pnl = 0.0
             for trade in open_trades:
-                # Mock current price calculation
-                current_price = 0.5  # Would get real price
+                market_info = await self._get_market_info(trade.market_id)
+                outcome_id = self._get_outcome_id(market_info, trade.direction) if market_info else None
+                current_price = await self._get_current_price(outcome_id) if outcome_id else None
+                if current_price is None:
+                    current_price = trade.entry_price  # Fallback: assume no change
                 if trade.direction == DirectionEnum.YES:
                     unrealized_pnl = (current_price - trade.entry_price) * trade.position_size
                 else:

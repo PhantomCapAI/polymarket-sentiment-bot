@@ -29,7 +29,11 @@ class Settings(BaseSettings):
     REDDIT_CLIENT_ID: str = ""
     REDDIT_CLIENT_SECRET: str = ""
     TELEGRAM_BOT_TOKEN: str = ""
-    
+    TELEGRAM_CHAT_ID: str = "1516882079"
+
+    # Claude Rate Limiting
+    CLAUDE_MAX_CALLS_PER_HOUR: int = 10
+
     # Trading Parameters
     MAX_POSITION_SIZE: float = 1000.0
     MAX_DAILY_LOSS: float = 2000.0

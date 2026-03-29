@@ -22,6 +22,10 @@ class SignalGenerationError(TradingBotException):
     """Signal generation errors"""
     pass
 
+class SentimentAnalysisError(TradingBotException):
+    """Sentiment analysis errors"""
+    pass
+
 class AuthenticationError(TradingBotException):
     """Authentication errors"""
     pass
