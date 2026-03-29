@@ -8,7 +8,7 @@ import re
 
 from ..core.config import settings
 from ..utils.circuit_breaker import claude_circuit_breaker
-from ..utils.exceptions import SentimentAnalysisError
+from ..utils.exceptions import SentimentAnalysisError, ExternalAPIError
 from .data_ingestion import DataIngestionService
 
 logger = logging.getLogger(__name__)
@@ -187,7 +187,8 @@ class SentimentEngine:
             self.claude_call_count = 0
             self.last_reset_time = current_time
             
-        return self.claude_call_count < settings.CLAUDE_MAX_CALLS_PER_HOUR
+        max_calls = getattr(settings, 'CLAUDE_MAX_CALLS_PER_HOUR', 10)
+        return self.claude_call_count < max_calls
     
     def _prepare_claude_context(self, question: str, data: List[Dict]) -> str:
         """Prepare context string for Claude analysis"""
@@ -205,7 +206,7 @@ class SentimentEngine:
         """Make actual API call to Claude"""
         try:
             message = await self.anthropic_client.messages.create(
-                model="claude-3-haiku-20240307",  # Fastest, cheapest model
+                model="claude-haiku-4-5-20251001",
                 max_tokens=500,
                 temperature=0.3,
                 messages=[{"role": "user", "content": prompt}]

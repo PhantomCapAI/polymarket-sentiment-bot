@@ -87,5 +87,6 @@ class CircuitBreaker:
         self.state = CircuitState.CLOSED
         logger.info("Circuit breaker manually reset")
 
-# Create instance for Polymarket API calls
+# Create instances for external API calls
 polymarket_circuit_breaker = CircuitBreaker(failure_threshold=3, timeout=60)
+claude_circuit_breaker = CircuitBreaker(failure_threshold=3, timeout=120)

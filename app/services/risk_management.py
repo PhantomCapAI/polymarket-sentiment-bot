@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List
+from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -121,11 +121,31 @@ class RiskManager:
         
         return trade_ids_to_close
     
-    async def _get_current_price(self, market_id: str) -> float:
-        """Get current market price - placeholder implementation"""
-        # This would integrate with actual Polymarket API or data service
-        # For now, return a mock price
-        return 0.5  # 50/50 price
+    async def _get_current_price(self, market_id: str) -> Optional[float]:
+        """Get current market price from Polymarket API"""
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=15) as client:
+                # Get market info to find token IDs
+                resp = await client.get(f"https://clob.polymarket.com/markets/{market_id}")
+                if resp.status_code != 200:
+                    return None
+                market = resp.json()
+                tokens = market.get("tokens", [])
+                if not tokens:
+                    return None
+                # Get YES token price
+                token_id = tokens[0].get("token_id")
+                price_resp = await client.get(
+                    "https://clob.polymarket.com/price",
+                    params={"token_id": token_id, "side": "buy"},
+                )
+                if price_resp.status_code == 200:
+                    return float(price_resp.json().get("price", 0))
+                return None
+        except Exception as e:
+            logger.error(f"Error fetching price for market {market_id}: {str(e)}")
+            return None
     
     async def get_risk_metrics(self) -> Dict[str, float]:
         """Get current risk metrics dashboard"""
